@@ -35,6 +35,7 @@ class HostHealth:
     avg_ms: float = 0.0
     samples: int = 0
     baseline_ms: float | None = None
+    ever_healthy: bool = False
 
 
 @dataclass
@@ -68,6 +69,13 @@ class HealthMonitor:
     def healthy(self) -> bool:
         return self.state in ("healthy", "unknown")
 
+    @property
+    def ever_healthy(self) -> bool:
+        """True once any monitored host has been seen healthy at least once.
+        Used to tell 'our scan is hurting a live target' (back off) apart from
+        'the target was never reachable' (don't deadlock)."""
+        return any(hh.ever_healthy for hh in self.health.values())
+
     async def _check_one(self, client: httpx.AsyncClient, hh: HostHealth) -> None:
         candidates = ([hh.host] if hh.host.startswith("http")
                       else [f"https://{hh.host}", f"http://{hh.host}"])
@@ -100,13 +108,16 @@ class HealthMonitor:
             if hh.consecutive_ok >= settings.health_recover_threshold or old == "unknown":
                 hh.state = "healthy"
                 hh.up = True
+                hh.ever_healthy = True
         else:
             hh.consecutive_fail += 1
             hh.consecutive_ok = 0
             if not up and hh.consecutive_fail >= settings.health_fail_threshold:
                 hh.state = "down"
                 hh.up = False
-            elif slow or hh.consecutive_fail >= 1:
+            elif slow or hh.consecutive_fail >= 2:
+                # a single slow/failed probe is not enough to degrade; this
+                # avoids tripping on one transient hiccup at startup.
                 hh.state = "degraded"
 
         get_db().add_uptime(self.target_id, hh.host, hh.up, status, round(ms, 1))

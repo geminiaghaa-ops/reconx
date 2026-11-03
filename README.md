@@ -54,6 +54,18 @@ python cli.py scan example.com --no-nuclei --in "*.example.com" --out "shop.exam
 python cli.py list
 ```
 
+### Input & troubleshooting
+
+- The target is a **domain/host**, not a full URL. You may paste a URL
+  (`https://site.tld/some/path`) — ReconX extracts the host (`site.tld`)
+  automatically. Subdomain enumeration then runs against that host.
+- If a scan ends with **"No live HTTP services found"**, the host wasn't
+  reachable/in-scope from the machine running ReconX (DNS, firewall, geo-block,
+  or a WAF challenge). It finishes cleanly instead of hanging.
+- The **health monitor** only pauses heavy stages when a target was reachable
+  and then degraded under load (so your scan doesn't take it down). A target
+  that was never reachable does not block the pipeline.
+
 ## Configuration (environment variables)
 
 | Variable | Purpose |

@@ -49,14 +49,24 @@ class Pipeline:
             ))
 
     async def _gate(self, stage: str) -> None:
-        """Pause a heavy stage while the target is unhealthy."""
+        """Gate a heavy stage on target health.
+
+        Back off and wait ONLY when the target was healthy and has now degraded
+        under our load. If the target was never reachable to begin with, don't
+        deadlock — log it and continue (stages needing live hosts simply find
+        nothing)."""
         self.db.set_health(self.target_id, self.monitor.state)
-        if not self.monitor.healthy():
-            self.log(f"PAUSE before {stage}: target {self.monitor.state}; waiting to recover")
+        if self.monitor.healthy():
+            return
+        if self.monitor.ever_healthy:
+            self.log(f"PAUSE before {stage}: target {self.monitor.state}; backing off to let it recover")
             self.db.update_run(self.run_id, status="paused", stage=f"paused:{stage}")
             ok = await self.monitor.wait_until_healthy(max_wait=180)
             self.db.update_run(self.run_id, status="running")
             self.log(f"RESUME {stage}: healthy={ok} (state={self.monitor.state})")
+        else:
+            self.log(f"NOTE before {stage}: target not reachable yet (state={self.monitor.state}); "
+                     f"continuing without backoff")
 
     # -- main ------------------------------------------------------------
     async def run(self) -> None:
@@ -93,7 +103,14 @@ class Pipeline:
             live = [s["url"] for s in services]
             self.stats["http_services"] = len(live)
             self.log(f"http: {len(live)} live services")
-            self.monitor.set_hosts(live or subs)
+            if not live:
+                self.log("No live HTTP services found — nothing to crawl or scan. "
+                         "Check that the domain is correct, in-scope, and reachable from this host.")
+                self.db.update_run(self.run_id, status="done", stage="done",
+                                   finished_at=time.time(), stats=_json(self.stats))
+                self.log("Recon complete.")
+                return
+            self.monitor.set_hosts(live)
 
             # 3. crawl
             await self._gate("crawl")

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from ..db import get_db
 from ..tools import availability
 from ..pipeline import run_target
+from ..util import normalize_target
 
 BASE = Path(__file__).parent
 app = FastAPI(title="ReconX", version="0.1.0")
@@ -51,12 +52,13 @@ async def api_targets():
 
 @app.post("/api/targets")
 async def api_add_target(payload: dict):
-    domain = (payload.get("domain") or "").strip().lower()
+    raw = payload.get("domain") or ""
+    domain = normalize_target(raw)
     if not domain:
-        raise HTTPException(400, "domain required")
+        raise HTTPException(400, "a valid domain or URL is required")
     db = get_db()
     tid = db.add_target(domain, payload.get("scope_in", ""), payload.get("scope_out", ""))
-    return {"id": tid, "domain": domain}
+    return {"id": tid, "domain": domain, "normalized_from": raw if raw.strip() != domain else None}
 
 
 @app.post("/api/targets/{target_id}/scan")

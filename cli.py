@@ -20,6 +20,7 @@ from reconx.db import get_db
 from reconx.tools import availability
 from reconx.pipeline import run_target
 from reconx.web.app import run_server
+from reconx.util import normalize_target
 
 
 def cmd_tools(_):
@@ -32,8 +33,12 @@ def cmd_tools(_):
 
 
 def cmd_add(args):
-    tid = get_db().add_target(args.domain, args.in_scope or "", args.out_scope or "")
-    print(f"target {tid}: {args.domain}")
+    domain = normalize_target(args.domain)
+    if not domain:
+        print("error: provide a valid domain or URL"); return 1
+    tid = get_db().add_target(domain, args.in_scope or "", args.out_scope or "")
+    note = f" (from {args.domain})" if args.domain.strip() != domain else ""
+    print(f"target {tid}: {domain}{note}")
 
 
 def cmd_list(_):
@@ -44,8 +49,12 @@ def cmd_list(_):
 
 
 def cmd_scan(args):
-    tid = get_db().add_target(args.domain, args.in_scope or "", args.out_scope or "")
-    print(f"scanning target {tid}: {args.domain} (nuclei={not args.no_nuclei}) ...")
+    domain = normalize_target(args.domain)
+    if not domain:
+        print("error: provide a valid domain or URL"); return 1
+    tid = get_db().add_target(domain, args.in_scope or "", args.out_scope or "")
+    note = f" (from {args.domain})" if args.domain.strip() != domain else ""
+    print(f"scanning target {tid}: {domain}{note} (nuclei={not args.no_nuclei}) ...")
     run_id = asyncio.run(run_target(tid, run_nuclei=not args.no_nuclei))
     run = get_db().get_run(run_id)
     print("\n--- log ---")
