@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# ReconX runtime data (DB, artifacts, scan output)
+.reconx/
+*.db
+*.db-wal
+*.db-shm
+reconx-data/
+artifacts/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
