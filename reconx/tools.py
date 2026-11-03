@@ -65,6 +65,89 @@ def first_available(stage: str) -> str | None:
     return None
 
 
+# Human description of the built-in fallback for each stage (None = no fallback).
+FALLBACK = {
+    "subdomains": "crt.sh (Certificate Transparency)",
+    "dns": "stdlib / dnspython resolver",
+    "ports": "async TCP connect scan (top ports)",
+    "http": "async HTTP probe + WAF/CDN fingerprint",
+    "crawl": "built-in crawler",
+    "js": "built-in JS analyzer (retire.js adds CVE libs)",
+    "screenshot": "headless Chrome/Chromium",
+    "vuln": None,  # nuclei has no built-in fallback
+}
+
+# One-line install hints per tool.
+INSTALL = {
+    "subfinder": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "assetfinder": "go install github.com/tomnomnom/assetfinder@latest",
+    "amass": "go install -v github.com/owasp-amass/amass/v4/...@master",
+    "dnsx": "go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+    "puredns": "go install github.com/d3mondev/puredns/v2@latest",
+    "massdns": "https://github.com/blechschmidt/massdns",
+    "naabu": "go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+    "httpx": "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "katana": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+    "gau": "go install github.com/lc/gau/v2/cmd/gau@latest",
+    "waybackurls": "go install github.com/tomnomnom/waybackurls@latest",
+    "gospider": "go install github.com/jaeles-project/gospider@latest",
+    "retire": "npm install -g retire",
+    "nuclei": "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+    "gowitness": "go install github.com/sensepost/gowitness@latest",
+}
+
+
+def _chrome_present() -> bool:
+    import glob as _g
+    if any(which(n) for n in ("google-chrome", "chromium", "chromium-browser", "chrome")):
+        return True
+    return bool(_g.glob("/opt/pw-browsers/chromium*/chrome-linux*/chrome")
+                or _g.glob("/opt/pw-browsers/chromium*/chrome-linux*/headless_shell"))
+
+
+async def plan() -> list[dict]:
+    """What each stage will actually run, right now: the chosen engine (external
+    tool or built-in fallback), plus which tools are missing and how to install
+    them. Used by `cli.py tools` and the dashboard so nothing is a black box."""
+    rows = []
+    for stage, tool_list in TOOLCHAIN.items():
+        installed = [t for t in tool_list if which(t)]
+        missing = [t for t in tool_list if not which(t)]
+        chosen = None
+        note = ""
+
+        if stage == "http":
+            if "httpx" in installed and await verify_pd("httpx"):
+                chosen = "httpx (ProjectDiscovery)"
+            elif "httpx" in installed:
+                note = "a non-ProjectDiscovery 'httpx' is on PATH and is ignored"
+        elif stage == "js":
+            chosen = "retire.js" if "retire" in installed else None
+        elif stage == "screenshot":
+            chosen = "gowitness" if "gowitness" in installed else None
+        else:
+            chosen = installed[0] if installed else None
+
+        if chosen:
+            engine, using_tool = chosen, True
+        else:
+            fb = FALLBACK.get(stage)
+            if stage == "screenshot" and not _chrome_present():
+                engine, using_tool = "DISABLED (no gowitness and no Chrome)", False
+            elif fb:
+                engine, using_tool = f"built-in: {fb}", False
+            else:
+                engine, using_tool = "DISABLED (no tool, no fallback)", False
+
+        rows.append({
+            "stage": stage, "engine": engine, "using_tool": using_tool,
+            "note": note, "installed": installed, "missing": missing,
+            "install": {t: INSTALL.get(t, "") for t in missing},
+            "has_fallback": FALLBACK.get(stage) is not None or stage == "screenshot",
+        })
+    return rows
+
+
 async def run(cmd: list[str], stdin: str | None = None, timeout: float = 900) -> ToolResult:
     """Run a subprocess, feed optional stdin, return stdout lines."""
     try:

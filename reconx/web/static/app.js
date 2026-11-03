@@ -7,15 +7,42 @@ let current = null;        // selected target id
 let activeTab = "overview";
 let pollTimer = null;
 
-async function loadTools(){
-  const t = await api("/api/tools");
-  const chips = [];
-  for(const [stage, tools] of Object.entries(t)){
-    for(const [name, on] of Object.entries(tools)){
-      chips.push(`<span class="tool-chip ${on?'on':'off'}" title="${stage}">${on?'●':'○'} ${name}</span>`);
-    }
+let _plan = null;
+async function loadPlan(){
+  _plan = await api("/api/plan");
+}
+function toggleEnv(){
+  const p = $("#env-panel");
+  if(p.style.display === "none"){ renderEnv(); p.style.display = "block"; }
+  else { p.style.display = "none"; }
+}
+function renderEnv(){
+  if(!_plan){ $("#env-panel").innerHTML = "loading…"; return; }
+  const rows = _plan.map(r => {
+    const cls = r.using_tool ? "ok" : (r.engine.includes("DISABLED") ? "down" : "warn");
+    const tag = r.using_tool ? "tool" : (r.engine.includes("DISABLED") ? "OFF" : "built-in");
+    const note = r.note ? `<div class="env-note">! ${esc(r.note)}</div>` : "";
+    return `<tr><td class="mono">${esc(r.stage)}</td>
+      <td><span class="badge ${cls==='ok'?'new':(cls==='warn'?'medium':'critical')}">${tag}</span></td>
+      <td>${esc(r.engine)}${note}</td></tr>`;
+  }).join("");
+  const missing = [...new Set(_plan.flatMap(r => r.missing))];
+  let install = "";
+  if(missing.length){
+    const lines = missing.map(m => {
+      const cmd = (_plan.find(r => r.install && r.install[m]) || {install:{}}).install[m] || "";
+      return `<tr><td class="mono">${esc(m)}</td><td class="mono">${esc(cmd)}</td></tr>`;
+    }).join("");
+    install = `<h4>Not installed — install the real tools (optional, faster/more complete):</h4>
+      <table>${lines}</table>
+      <div class="hint">Nuclei has NO built-in fallback — install it for vuln scanning. Others fall back automatically.</div>`;
+  } else {
+    install = `<div class="hint">All optional tools are installed. 🎉</div>`;
   }
-  $("#toolbar").innerHTML = chips.join("");
+  $("#env-panel").innerHTML = `
+    <h4>What runs each stage right now</h4>
+    <table><thead><tr><th>stage</th><th>mode</th><th>engine</th></tr></thead><tbody>${rows}</tbody></table>
+    ${install}`;
 }
 
 async function loadTargets(){
@@ -181,6 +208,6 @@ function startPolling(){
   }, 4000);
 }
 
-loadTools();
+loadPlan();
 loadTargets();
 startPolling();

@@ -36,6 +36,12 @@ async def api_tools():
     return availability()
 
 
+@app.get("/api/plan")
+async def api_plan():
+    from ..tools import plan
+    return await plan()
+
+
 @app.get("/api/targets")
 async def api_targets():
     db = get_db()

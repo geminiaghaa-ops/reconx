@@ -51,6 +51,17 @@ class Pipeline:
     def log(self, msg: str) -> None:
         self.db.append_log(self.run_id, f"[{time.strftime('%H:%M:%S')}] {msg}")
 
+    def _begin(self, display: str, plan_key: str = "") -> None:
+        """Mark a stage as started and log which engine it uses, so the live log
+        shows what's happening *before* the stage finishes."""
+        self._stage_t0 = time.time()
+        self.db.update_run(self.run_id, stage=display)
+        eng = getattr(self, "engines", {}).get(plan_key, "")
+        self.log(f"▶ {display}" + (f"  —  via {eng}" if eng else "") + " …")
+
+    def _took(self) -> str:
+        return f"{time.time() - getattr(self, '_stage_t0', time.time()):.1f}s"
+
     def _health_event(self, host: str, old: str, new: str) -> None:
         self.db.set_health(self.target_id, self.monitor.state)
         self.log(f"HEALTH {host}: {old} -> {new}")
@@ -74,25 +85,34 @@ class Pipeline:
     async def run(self) -> None:
         self.db.update_run(self.run_id, status="running", started_at=time.time())
         self.log(f"Start recon for {self.t['domain']}")
-        avail = tools.availability()
-        self.log("Toolchain: " + ", ".join(
-            f"{s}:{','.join(k for k,v in d.items() if v) or 'builtin'}" for s, d in avail.items()))
+        plan = await tools.plan()
+        self.engines = {r["stage"]: r["engine"] for r in plan}
+        self.log("── Execution plan (engine per stage) ──")
+        for r in plan:
+            mark = "[tool]    " if r["using_tool"] else ("[built-in]" if "DISABLED" not in r["engine"] else "[off]     ")
+            self.log(f"   {r['stage']:11s} {mark} {r['engine']}")
+            if r["note"]:
+                self.log(f"               ! {r['note']}")
+        miss = sorted({t for r in plan for t in r["missing"]})
+        if miss:
+            self.log(f"Not installed, using fallbacks: {', '.join(miss)}  (run `python cli.py tools` for install commands)")
+        self.log("───────────────────────────────────────")
 
         try:
             # 1. subdomains
-            self.db.update_run(self.run_id, stage="subdomains")
+            self._begin("subdomains", "subdomains")
             sd = await subdomains.enumerate(self.apex)
             subs = self.scope.filter(sd["subdomains"])
             new_subs = [s for s in subs if self.db.upsert_asset(self.target_id, "subdomain", s, {"source": sd["source"]})]
             self.stats["subdomains"] = len(subs)
             self.stats["new_subdomains"] = len(new_subs)
-            self.log(f"subdomains: {len(subs)} in-scope ({len(new_subs)} new) via {sd['source']}")
+            self.log(f"✓ subdomains: {len(subs)} in-scope ({len(new_subs)} new) via {sd['source']} [{self._took()}]")
             if new_subs:
                 await notify.send(f"ReconX {self.apex}: {len(new_subs)} new subdomains")
             subs = subs or [self.apex]
 
             # 2. dns resolve + wildcard
-            self.db.update_run(self.run_id, stage="dns-resolve")
+            self._begin("dns-resolve", "dns")
             dns = await dns_resolve.resolve(subs, self.apex)
             resolved = dns["resolved"]
             live_hosts = [h for h in dns["live_hosts"] if self.scope.in_scope(h)] or subs
@@ -101,7 +121,7 @@ class Pipeline:
                                      {"ips": d["ips"], "cname": d["cname"], "wildcard": d["wildcard"]})
             self.stats["resolved"] = len(resolved)
             self.stats["wildcard"] = len(dns["wildcard_ips"])
-            self.log(f"dns: {len(resolved)} resolved, wildcard_ips={len(dns['wildcard_ips'])}")
+            self.log(f"✓ dns: {len(resolved)} resolved, wildcard_ips={len(dns['wildcard_ips'])} [{self._took()}]")
 
             # start health monitoring now that we know which hosts exist
             self.monitor.set_hosts(live_hosts)
@@ -109,7 +129,7 @@ class Pipeline:
             await asyncio.sleep(1)
 
             # 3. port scan
-            self.db.update_run(self.run_id, stage="ports")
+            self._begin("ports", "ports")
             port_map = await portscan.scan(live_hosts)
             extra_urls: list[str] = []
             n_ports = 0
@@ -118,11 +138,11 @@ class Pipeline:
                 self.db.upsert_asset(self.target_id, "port", h, {"ports": plist})
                 extra_urls += portscan.ports_to_urls(h, plist)
             self.stats["open_ports"] = n_ports
-            self.log(f"ports: {n_ports} open across {len(port_map)} hosts")
+            self.log(f"✓ ports: {n_ports} open across {len(port_map)} hosts [{self._took()}]")
 
             # 4. http probe (+ WAF/CDN)
             await self._gate("http-probe")
-            self.db.update_run(self.run_id, stage="http-probe")
+            self._begin("http-probe", "http")
             probe_targets = sorted(set(live_hosts) | {u for u in extra_urls if self.scope.in_scope(u)})
             services = await http_probe.probe(probe_targets)
             services = [s for s in services if self.scope.in_scope(s["url"])]
@@ -131,7 +151,7 @@ class Pipeline:
             live = [s["url"] for s in services]
             self.stats["http_services"] = len(live)
             waffed = sum(1 for s in services if s.get("waf") or s.get("cdn"))
-            self.log(f"http: {len(live)} live services ({waffed} behind WAF/CDN)")
+            self.log(f"✓ http: {len(live)} live services ({waffed} behind WAF/CDN) [{self._took()}]")
             if not live:
                 self.log("No live HTTP services found — nothing more to scan. "
                          "Check the domain is correct, in-scope, and reachable from this host.")
@@ -142,7 +162,7 @@ class Pipeline:
             self.monitor.set_hosts(live)
 
             # 5. subdomain takeover
-            self.db.update_run(self.run_id, stage="takeover")
+            self._begin("takeover")
             tk = await takeover.check(resolved)
             nt = 0
             for f in tk:
@@ -151,25 +171,25 @@ class Pipeline:
                     nt += 1
             self.stats["takeover"] = nt
             conf = [f for f in tk if f["confirmed"]]
-            self.log(f"takeover: {len(tk)} candidates ({len(conf)} fingerprint-confirmed)")
+            self.log(f"✓ takeover: {len(tk)} candidates ({len(conf)} fingerprint-confirmed) [{self._took()}]")
             if conf:
                 await notify.send(f":rotating_light: ReconX {self.apex}: {len(conf)} likely subdomain takeover(s)!")
 
             # 6. screenshot
             if self.run_screenshot and (tools.which("gowitness") or screenshot.find_chrome()):
                 await self._gate("screenshot")
-                self.db.update_run(self.run_id, stage="screenshot")
+                self._begin("screenshot", "screenshot")
                 shots = await screenshot.capture(live, settings.artifacts_dir / f"shots_{self.target_id}")
                 for url, path in shots.items():
                     self.db.set_screenshot(self.target_id, url, path)
                 self.stats["screenshots"] = len(shots)
-                self.log(f"screenshot: captured {len(shots)}/{len(live)}")
+                self.log(f"✓ screenshot: captured {len(shots)}/{len(live)} [{self._took()}]")
             else:
                 self.log("screenshot: skipped (no gowitness/chrome)")
 
             # 7. crawl
             await self._gate("crawl")
-            self.db.update_run(self.run_id, stage="crawl")
+            self._begin("crawl", "crawl")
             crawled = await crawl.crawl(live)
             urls = self.scope.filter(crawled["urls"])
             js = self.scope.filter(crawled["js"])
@@ -177,10 +197,10 @@ class Pipeline:
                 self.db.upsert_asset(self.target_id, "url", u)
             self.stats["urls"] = len(urls)
             self.stats["js_files"] = len(js)
-            self.log(f"crawl: {len(urls)} urls, {len(js)} js files")
+            self.log(f"✓ crawl: {len(urls)} urls, {len(js)} js files [{self._took()}]")
 
             # 8. js analysis
-            self.db.update_run(self.run_id, stage="js-analysis")
+            self._begin("js-analysis", "js")
             jsf = await jsanalysis.analyze(js)
             njs = 0
             for f in jsf:
@@ -189,14 +209,14 @@ class Pipeline:
                     njs += 1
             self.stats["js_findings"] = njs
             hi = [f for f in jsf if f.get("severity") in ("high", "critical")]
-            self.log(f"js: {njs} findings ({len(hi)} high/critical)")
+            self.log(f"✓ js: {njs} findings ({len(hi)} high/critical) [{self._took()}]")
             if hi:
                 await notify.send(f":rotating_light: ReconX {self.apex}: {len(hi)} high-severity JS findings")
 
             # 9. nuclei
             if self.run_nuclei and tools.which("nuclei"):
                 await self._gate("nuclei")
-                self.db.update_run(self.run_id, stage="nuclei")
+                self._begin("nuclei", "vuln")
                 nf = await nuclei_scan.scan(live)
                 nn = 0
                 for f in nf:
@@ -205,7 +225,7 @@ class Pipeline:
                         nn += 1
                 self.stats["findings"] = nn
                 crit = [f for f in nf if f["severity"] in ("high", "critical")]
-                self.log(f"nuclei: {nn} findings ({len(crit)} high/critical)")
+                self.log(f"✓ nuclei: {nn} findings ({len(crit)} high/critical) [{self._took()}]")
                 if crit:
                     await notify.send(f":rotating_light: ReconX {self.apex}: {len(crit)} high/critical nuclei findings")
             else:

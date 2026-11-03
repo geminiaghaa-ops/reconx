@@ -24,12 +24,27 @@ from reconx.util import normalize_target
 
 
 def cmd_tools(_):
-    av = availability()
-    print(json.dumps(av, indent=2))
-    missing = [t for d in av.values() for t, on in d.items() if not on]
+    import asyncio
+    from reconx.tools import plan
+    rows = asyncio.run(plan())
+    print("Engine that will run each stage (external tool if installed, else built-in fallback):\n")
+    print(f"  {'STAGE':12s} {'MODE':10s} ENGINE")
+    print("  " + "-" * 60)
+    for r in rows:
+        mode = "tool" if r["using_tool"] else ("built-in" if "DISABLED" not in r["engine"] else "OFF")
+        print(f"  {r['stage']:12s} {mode:10s} {r['engine']}")
+        if r["note"]:
+            print(f"  {'':12s} {'':10s} ! {r['note']}")
+    missing = sorted({t for r in rows for t in r["missing"]})
     if missing:
-        print("\nOptional tools not installed (built-in fallbacks will be used):")
-        print("  " + ", ".join(sorted(set(missing))))
+        from reconx.tools import INSTALL
+        print("\nNot installed (fallbacks are used instead). To get the real tools:\n")
+        for t in missing:
+            print(f"  {t:12s} {INSTALL.get(t, '')}")
+        print("\nTip: install Go (golang) + Node, then run the commands above. "
+              "Nuclei has NO fallback — install it to get vuln scanning.")
+    else:
+        print("\nAll optional tools installed. 🎉")
 
 
 def cmd_add(args):

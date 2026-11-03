@@ -62,3 +62,8 @@ td.mono,.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:12px;
 .pill{font-size:11px;padding:2px 9px;border-radius:12px;border:1px solid var(--border)}
 .pill.running{color:var(--accent);border-color:var(--accent)}
 .pill.done{color:var(--ok)} .pill.paused{color:var(--warn)} .pill.error{color:var(--down)}
+.env-panel{background:var(--panel);border-bottom:1px solid var(--border);padding:16px 20px;max-height:50vh;overflow:auto}
+.env-panel h4{margin:14px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.env-panel h4:first-child{margin-top:0}
+.env-panel table{margin-bottom:6px}
+.env-note{color:var(--warn);font-size:11px;margin-top:3px}
