@@ -96,7 +96,9 @@ async def api_target_detail(target_id: int):
             "SELECT value, is_new, first_seen FROM assets WHERE target_id=? AND kind='subdomain' ORDER BY is_new DESC, value",
             (target_id,)),
         "services": db.query(
-            "SELECT url,status,title,tech,webserver,ip FROM http_services WHERE target_id=? ORDER BY status", (target_id,)),
+            "SELECT url,status,title,tech,webserver,ip,cdn,waf,screenshot FROM http_services WHERE target_id=? ORDER BY status", (target_id,)),
+        "ports": db.query(
+            "SELECT value AS host, meta FROM assets WHERE target_id=? AND kind='port' ORDER BY value", (target_id,)),
         "js_findings": db.query(
             "SELECT source_url,kind,name,value,severity,context FROM js_findings WHERE target_id=? "
             "ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
@@ -106,6 +108,17 @@ async def api_target_detail(target_id: int):
             "ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
             "WHEN 'low' THEN 3 ELSE 4 END", (target_id,)),
     }
+
+
+@app.get("/api/screenshot")
+async def api_screenshot(path: str):
+    # Only serve files inside the configured artifacts dir.
+    from ..config import settings
+    base = settings.artifacts_dir.resolve()
+    p = Path(path).resolve()
+    if base in p.parents and p.exists() and p.suffix.lower() == ".png":
+        return FileResponse(str(p))
+    raise HTTPException(404, "not found")
 
 
 @app.get("/api/targets/{target_id}/health")

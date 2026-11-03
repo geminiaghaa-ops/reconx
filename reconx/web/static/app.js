@@ -52,7 +52,7 @@ async function renderDetail(){
   const c = d.counts, t = d.target, run = d.run || {};
   const statusPill = d.running ? `<span class="pill running">${esc(run.stage||'running')}</span>`
       : (run.status ? `<span class="pill ${run.status}">${esc(run.status)}</span>` : '');
-  const tabs = ["overview","subdomains","services","js","vulns","health","log"];
+  const tabs = ["overview","subdomains","services","ports","js","vulns","health","log"];
   const detail = $("#detail");
   detail.innerHTML = `
     <h2>${esc(t.domain)} <span class="dot ${t.health||'unknown'}"></span> ${statusPill}</h2>
@@ -89,9 +89,18 @@ function renderTab(d){
       r => `<tr><td class="mono">${esc(r.value)} ${r.is_new?'<span class="badge new">new</span>':''}</td></tr>`);
   }
   else if(activeTab==="services"){
-    body.innerHTML = tableOr(d.services, ["url","status","title","tech","server","ip"],
-      r => `<tr><td class="mono">${esc(r.url)}</td><td>${esc(r.status)}</td><td>${esc(r.title)}</td>
-            <td>${esc(r.tech)}</td><td>${esc(r.webserver)}</td><td class="mono">${esc(r.ip)}</td></tr>`);
+    body.innerHTML = tableOr(d.services, ["url","status","title","tech","waf / cdn","ip","shot"],
+      r => {
+        const wc = [r.waf?`<span class="badge high">${esc(r.waf)}</span>`:'', r.cdn?`<span class="badge low">${esc(r.cdn)}</span>`:''].filter(Boolean).join(' ')||'—';
+        const shot = r.screenshot ? `<a href="/api/screenshot?path=${encodeURIComponent(r.screenshot)}" target="_blank">📷</a>` : '';
+        return `<tr><td class="mono">${esc(r.url)}</td><td>${esc(r.status)}</td><td>${esc(r.title)}</td>
+            <td>${esc(r.tech)}</td><td>${wc}</td><td class="mono">${esc(r.ip)}</td><td>${shot}</td></tr>`;
+      });
+  }
+  else if(activeTab==="ports"){
+    const rows = (d.ports||[]).map(p => { let m={}; try{m=JSON.parse(p.meta||"{}");}catch(e){} return {host:p.host, ports:(m.ports||[]).join(", ")}; });
+    body.innerHTML = tableOr(rows, ["host","open ports"],
+      r => `<tr><td class="mono">${esc(r.host)}</td><td class="mono">${esc(r.ports)}</td></tr>`);
   }
   else if(activeTab==="js"){
     body.innerHTML = tableOr(d.js_findings, ["sev","kind","name","value","source"],

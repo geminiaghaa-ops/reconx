@@ -14,7 +14,11 @@ pure-Python fallback keeps the stage working.
 
 - **Scope enforcement** — in/out-of-scope rules (with wildcards) gate every stage.
 - **Subdomain enumeration** — `subfinder` / `assetfinder` / `amass`, always merged with Certificate Transparency (crt.sh).
-- **HTTP probing** — `httpx`, or built-in async probe (status, title, tech, server, IP).
+- **DNS resolution + wildcard detection** — `dnsx`, or built-in resolver (A + CNAME); flags wildcard zones so fake hosts aren't trusted.
+- **Port scanning** — `naabu`, or a built-in async TCP connect scan over a curated top-ports list (not just 80/443); open ports feed extra probe URLs.
+- **HTTP probing + WAF/CDN detection** — `httpx`, or built-in async probe (status, title, tech, server, IP) with Cloudflare/Akamai/Fastly/Incapsula/Sucuri/… fingerprinting.
+- **Subdomain takeover** — built-in fingerprint engine (GitHub Pages, S3, Heroku, Shopify, Azure, …) flagging dangling CNAMEs.
+- **Screenshots** — `gowitness`, or headless Chrome/Chromium, for fast visual triage.
 - **Crawling & URL discovery** — `katana` + `gau`/`waybackurls`, or built-in crawler; extracts JS files.
 - **JavaScript analysis** (built-in):
   - secrets (AWS/GCP/Stripe/Slack/GitHub/JWT/private keys, …) with entropy + placeholder filtering
@@ -87,8 +91,12 @@ reconx/
   tools.py                  external-tool detection + subprocess runner
   notify.py                 Discord/Slack/Telegram
   pipeline.py               orchestrator (health-gated stages)
+  util.py                   target input normalization (URL/host:port -> host)
   modules/
-    subdomains.py  http_probe.py  crawl.py
+    subdomains.py  dns_resolve.py  ports.py  http_probe.py  crawl.py
+    waf_cdn.py              WAF/CDN fingerprinting
+    takeover.py             subdomain-takeover fingerprint engine
+    screenshot.py           gowitness / headless-Chrome screenshots
     jsanalysis.py           JS secrets/endpoints/sinks/sourcemaps + retire.js
     nuclei_scan.py          nuclei wrapper
     uptime.py               target-health monitor + circuit-breaker

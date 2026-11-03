@@ -14,6 +14,7 @@ import httpx
 
 from ..config import settings
 from .. import tools
+from . import waf_cdn
 
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 _TECH_HINTS = {
@@ -31,8 +32,12 @@ _TECH_HINTS = {
 
 async def _probe_py(host: str, client: httpx.AsyncClient, sem: asyncio.Semaphore) -> dict | None:
     async with sem:
-        for scheme in ("https", "http"):
-            url = f"{scheme}://{host}"
+        # Accept both bare hosts (try https then http) and full URLs (use as-is).
+        if host.startswith(("http://", "https://")):
+            candidates = [host]
+        else:
+            candidates = [f"https://{host}", f"http://{host}"]
+        for url in candidates:
             try:
                 r = await client.get(url, follow_redirects=True)
             except Exception:
@@ -46,6 +51,7 @@ async def _probe_py(host: str, client: httpx.AsyncClient, sem: asyncio.Semaphore
                 ip = r.extensions.get("network_stream").get_extra_info("peername")[0]  # type: ignore
             except Exception:
                 ip = ""
+            cdn, waf = waf_cdn.detect(dict(r.headers), body_snippet=body[:2000])
             return {
                 "url": str(r.url),
                 "status": r.status_code,
@@ -54,6 +60,8 @@ async def _probe_py(host: str, client: httpx.AsyncClient, sem: asyncio.Semaphore
                 "webserver": r.headers.get("server", ""),
                 "ip": ip,
                 "content_len": len(r.content),
+                "cdn": cdn,
+                "waf": waf,
             }
     return None
 
@@ -62,7 +70,7 @@ async def probe(hosts: list[str]) -> list[dict]:
     tool = tools.first_available("http")
     if tool == "httpx" and await tools.verify_pd("httpx"):
         args = ["httpx", "-silent", "-json", "-title", "-tech-detect", "-status-code",
-                "-web-server", "-ip", "-follow-redirects", "-no-color"]
+                "-web-server", "-ip", "-cdn", "-follow-redirects", "-no-color"]
         res = await tools.run(args, stdin="\n".join(hosts), timeout=900)
         out = []
         for obj in tools.parse_jsonl(res.lines):
@@ -74,6 +82,8 @@ async def probe(hosts: list[str]) -> list[dict]:
                 "webserver": obj.get("webserver") or obj.get("web-server", ""),
                 "ip": obj.get("host") or obj.get("ip", ""),
                 "content_len": obj.get("content_length") or obj.get("content-length", 0) or 0,
+                "cdn": obj.get("cdn_name", "") if obj.get("cdn") else "",
+                "waf": "",
             })
         if out:
             return out

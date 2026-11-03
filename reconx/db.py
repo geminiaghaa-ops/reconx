@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS http_services (
     webserver   TEXT DEFAULT '',
     ip          TEXT DEFAULT '',
     content_len INTEGER DEFAULT 0,
+    cdn         TEXT DEFAULT '',
+    waf         TEXT DEFAULT '',
+    screenshot  TEXT DEFAULT '',
     first_seen  REAL NOT NULL,
     last_seen   REAL NOT NULL,
     UNIQUE(target_id, url)
@@ -116,7 +119,23 @@ class DB:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA busy_timeout=5000;")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a DB was first created."""
+        wanted = {
+            "http_services": {
+                "cdn": "TEXT DEFAULT ''",
+                "waf": "TEXT DEFAULT ''",
+                "screenshot": "TEXT DEFAULT ''",
+            },
+        }
+        for table, cols in wanted.items():
+            have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for col, decl in cols.items():
+                if col not in have:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     @contextmanager
     def _cur(self):
@@ -176,17 +195,22 @@ class DB:
         with self._cur() as c:
             c.execute("SELECT id FROM http_services WHERE target_id=? AND url=?", (target_id, url))
             row = c.fetchone()
-            cols = ["status", "title", "tech", "webserver", "ip", "content_len"]
+            cols = ["status", "title", "tech", "webserver", "ip", "content_len", "cdn", "waf"]
             vals = [fields.get(k) for k in cols]
             if row:
                 sets = ", ".join(f"{col}=?" for col in cols)
                 c.execute(f"UPDATE http_services SET {sets}, last_seen=? WHERE id=?", (*vals, now, row["id"]))
             else:
                 c.execute(
-                    "INSERT INTO http_services(target_id,url,status,title,tech,webserver,ip,content_len,first_seen,last_seen) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO http_services(target_id,url,status,title,tech,webserver,ip,content_len,cdn,waf,first_seen,last_seen) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (target_id, url, *vals, now, now),
                 )
+
+    def set_screenshot(self, target_id: int, url: str, path: str) -> None:
+        with self._cur() as c:
+            c.execute("UPDATE http_services SET screenshot=? WHERE target_id=? AND url=?",
+                      (path, target_id, url))
 
     def add_js_finding(self, target_id: int, source_url: str, kind: str, value: str,
                        name: str = "", severity: str = "info", context: str = "") -> bool:

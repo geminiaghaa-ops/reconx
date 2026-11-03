@@ -1,60 +1,64 @@
 """Recon pipeline orchestrator.
 
-Wires the stages together for one target, enforcing scope at every boundary and
-consulting the health monitor before each heavy stage so we never pile load on
-a struggling target. Results stream into SQLite; new assets trigger notifications.
+Phase 1 = attack-surface mapping. Stages, in order (scope enforced at every
+boundary; health-gated stages marked [G]):
 
-Stages:
-  1. subdomains   -> assets(kind=subdomain)
-  2. http probe   -> http_services        [health-gated]
-  3. crawl        -> assets(kind=url) + JS list   [health-gated]
-  4. js analysis  -> js_findings
-  5. nuclei       -> findings              [health-gated]
+  1. subdomains        -> assets(subdomain)
+  2. dns resolve       -> resolved hosts (A + CNAME) + wildcard detection
+  3. port scan         -> assets(port) + extra candidate URLs
+  4. http probe (+WAF) -> http_services                               [G]
+  5. takeover          -> findings(engine=takeover)
+  6. screenshot        -> http_services.screenshot                    [G]
+  7. crawl             -> assets(url) + JS list                       [G]
+  8. js analysis       -> js_findings
+  9. nuclei            -> findings                                    [G]
+
+The health monitor runs in the background from stage 2 on; heavy stages pause
+only if a target was healthy and then degraded under our load.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 from .config import settings
 from .db import get_db
 from .scope import Scope
 from . import notify, tools
-from .modules import subdomains, http_probe, crawl, jsanalysis, nuclei_scan
+from .modules import (subdomains, dns_resolve, ports as portscan, http_probe,
+                      takeover, screenshot, crawl, jsanalysis, nuclei_scan)
 from .modules.uptime import HealthMonitor
 
 
+def _json(d: dict) -> str:
+    return json.dumps(d)
+
+
 class Pipeline:
-    def __init__(self, target_id: int, run_nuclei: bool = True):
+    def __init__(self, target_id: int, run_nuclei: bool = True, run_screenshot: bool = True):
         self.db = get_db()
         self.target_id = target_id
         self.t = self.db.get_target(target_id)
         self.scope = Scope(self.t["domain"], self.t["scope_in"], self.t["scope_out"])
+        self.apex = self.t["domain"]
         self.run_id = self.db.create_run(target_id)
         self.monitor = HealthMonitor(target_id=target_id, on_event=self._health_event)
         self.run_nuclei = run_nuclei
+        self.run_screenshot = run_screenshot
         self.stats: dict = {}
 
-    # -- helpers ---------------------------------------------------------
     def log(self, msg: str) -> None:
-        line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-        self.db.append_log(self.run_id, line)
+        self.db.append_log(self.run_id, f"[{time.strftime('%H:%M:%S')}] {msg}")
 
     def _health_event(self, host: str, old: str, new: str) -> None:
         self.db.set_health(self.target_id, self.monitor.state)
         self.log(f"HEALTH {host}: {old} -> {new}")
         if new in ("down", "degraded"):
             asyncio.create_task(notify.send(
-                f":warning: ReconX: {host} is {new.upper()} during scan of {self.t['domain']} — backing off."
-            ))
+                f":warning: ReconX: {host} is {new.upper()} during scan of {self.t['domain']} — backing off."))
 
     async def _gate(self, stage: str) -> None:
-        """Gate a heavy stage on target health.
-
-        Back off and wait ONLY when the target was healthy and has now degraded
-        under our load. If the target was never reachable to begin with, don't
-        deadlock — log it and continue (stages needing live hosts simply find
-        nothing)."""
         self.db.set_health(self.target_id, self.monitor.state)
         if self.monitor.healthy():
             return
@@ -65,54 +69,105 @@ class Pipeline:
             self.db.update_run(self.run_id, status="running")
             self.log(f"RESUME {stage}: healthy={ok} (state={self.monitor.state})")
         else:
-            self.log(f"NOTE before {stage}: target not reachable yet (state={self.monitor.state}); "
-                     f"continuing without backoff")
+            self.log(f"NOTE before {stage}: target not reachable yet (state={self.monitor.state}); continuing")
 
-    # -- main ------------------------------------------------------------
     async def run(self) -> None:
         self.db.update_run(self.run_id, status="running", started_at=time.time())
         self.log(f"Start recon for {self.t['domain']}")
         avail = tools.availability()
-        self.log(f"Toolchain: " + ", ".join(
+        self.log("Toolchain: " + ", ".join(
             f"{s}:{','.join(k for k,v in d.items() if v) or 'builtin'}" for s, d in avail.items()))
 
         try:
             # 1. subdomains
             self.db.update_run(self.run_id, stage="subdomains")
-            sd = await subdomains.enumerate(self.t["domain"])
+            sd = await subdomains.enumerate(self.apex)
             subs = self.scope.filter(sd["subdomains"])
             new_subs = [s for s in subs if self.db.upsert_asset(self.target_id, "subdomain", s, {"source": sd["source"]})]
             self.stats["subdomains"] = len(subs)
             self.stats["new_subdomains"] = len(new_subs)
             self.log(f"subdomains: {len(subs)} in-scope ({len(new_subs)} new) via {sd['source']}")
             if new_subs:
-                await notify.send(f"ReconX {self.t['domain']}: {len(new_subs)} new subdomains")
+                await notify.send(f"ReconX {self.apex}: {len(new_subs)} new subdomains")
+            subs = subs or [self.apex]
 
-            # start health monitoring on discovered hosts
-            self.monitor.set_hosts(subs or [self.t["domain"]])
+            # 2. dns resolve + wildcard
+            self.db.update_run(self.run_id, stage="dns-resolve")
+            dns = await dns_resolve.resolve(subs, self.apex)
+            resolved = dns["resolved"]
+            live_hosts = [h for h in dns["live_hosts"] if self.scope.in_scope(h)] or subs
+            for h, d in resolved.items():
+                self.db.upsert_asset(self.target_id, "subdomain", h,
+                                     {"ips": d["ips"], "cname": d["cname"], "wildcard": d["wildcard"]})
+            self.stats["resolved"] = len(resolved)
+            self.stats["wildcard"] = len(dns["wildcard_ips"])
+            self.log(f"dns: {len(resolved)} resolved, wildcard_ips={len(dns['wildcard_ips'])}")
+
+            # start health monitoring now that we know which hosts exist
+            self.monitor.set_hosts(live_hosts)
             self.monitor.start()
             await asyncio.sleep(1)
 
-            # 2. http probe
+            # 3. port scan
+            self.db.update_run(self.run_id, stage="ports")
+            port_map = await portscan.scan(live_hosts)
+            extra_urls: list[str] = []
+            n_ports = 0
+            for h, plist in port_map.items():
+                n_ports += len(plist)
+                self.db.upsert_asset(self.target_id, "port", h, {"ports": plist})
+                extra_urls += portscan.ports_to_urls(h, plist)
+            self.stats["open_ports"] = n_ports
+            self.log(f"ports: {n_ports} open across {len(port_map)} hosts")
+
+            # 4. http probe (+ WAF/CDN)
             await self._gate("http-probe")
             self.db.update_run(self.run_id, stage="http-probe")
-            services = await http_probe.probe(subs or [self.t["domain"]])
+            probe_targets = sorted(set(live_hosts) | {u for u in extra_urls if self.scope.in_scope(u)})
+            services = await http_probe.probe(probe_targets)
             services = [s for s in services if self.scope.in_scope(s["url"])]
             for s in services:
                 self.db.upsert_http(self.target_id, **s)
             live = [s["url"] for s in services]
             self.stats["http_services"] = len(live)
-            self.log(f"http: {len(live)} live services")
+            waffed = sum(1 for s in services if s.get("waf") or s.get("cdn"))
+            self.log(f"http: {len(live)} live services ({waffed} behind WAF/CDN)")
             if not live:
-                self.log("No live HTTP services found — nothing to crawl or scan. "
-                         "Check that the domain is correct, in-scope, and reachable from this host.")
+                self.log("No live HTTP services found — nothing more to scan. "
+                         "Check the domain is correct, in-scope, and reachable from this host.")
                 self.db.update_run(self.run_id, status="done", stage="done",
                                    finished_at=time.time(), stats=_json(self.stats))
                 self.log("Recon complete.")
                 return
             self.monitor.set_hosts(live)
 
-            # 3. crawl
+            # 5. subdomain takeover
+            self.db.update_run(self.run_id, stage="takeover")
+            tk = await takeover.check(resolved)
+            nt = 0
+            for f in tk:
+                if self.db.add_finding(self.target_id, "takeover", f["service"], f["evidence"],
+                                       f["severity"], f["host"], {"cname": f["cname"], "confirmed": f["confirmed"]}):
+                    nt += 1
+            self.stats["takeover"] = nt
+            conf = [f for f in tk if f["confirmed"]]
+            self.log(f"takeover: {len(tk)} candidates ({len(conf)} fingerprint-confirmed)")
+            if conf:
+                await notify.send(f":rotating_light: ReconX {self.apex}: {len(conf)} likely subdomain takeover(s)!")
+
+            # 6. screenshot
+            if self.run_screenshot and (tools.which("gowitness") or screenshot.find_chrome()):
+                await self._gate("screenshot")
+                self.db.update_run(self.run_id, stage="screenshot")
+                shots = await screenshot.capture(live, settings.artifacts_dir / f"shots_{self.target_id}")
+                for url, path in shots.items():
+                    self.db.set_screenshot(self.target_id, url, path)
+                self.stats["screenshots"] = len(shots)
+                self.log(f"screenshot: captured {len(shots)}/{len(live)}")
+            else:
+                self.log("screenshot: skipped (no gowitness/chrome)")
+
+            # 7. crawl
             await self._gate("crawl")
             self.db.update_run(self.run_id, stage="crawl")
             crawled = await crawl.crawl(live)
@@ -124,22 +179,21 @@ class Pipeline:
             self.stats["js_files"] = len(js)
             self.log(f"crawl: {len(urls)} urls, {len(js)} js files")
 
-            # 4. js analysis
+            # 8. js analysis
             self.db.update_run(self.run_id, stage="js-analysis")
             jsf = await jsanalysis.analyze(js)
             njs = 0
             for f in jsf:
-                if self.db.add_js_finding(self.target_id, f["source_url"], f["kind"],
-                                          f["value"], f.get("name", ""), f.get("severity", "info"),
-                                          f.get("context", "")):
+                if self.db.add_js_finding(self.target_id, f["source_url"], f["kind"], f["value"],
+                                          f.get("name", ""), f.get("severity", "info"), f.get("context", "")):
                     njs += 1
             self.stats["js_findings"] = njs
             hi = [f for f in jsf if f.get("severity") in ("high", "critical")]
             self.log(f"js: {njs} findings ({len(hi)} high/critical)")
             if hi:
-                await notify.send(f":rotating_light: ReconX {self.t['domain']}: {len(hi)} high-severity JS findings (secrets/libs)")
+                await notify.send(f":rotating_light: ReconX {self.apex}: {len(hi)} high-severity JS findings")
 
-            # 5. nuclei
+            # 9. nuclei
             if self.run_nuclei and tools.which("nuclei"):
                 await self._gate("nuclei")
                 self.db.update_run(self.run_id, stage="nuclei")
@@ -153,7 +207,7 @@ class Pipeline:
                 crit = [f for f in nf if f["severity"] in ("high", "critical")]
                 self.log(f"nuclei: {nn} findings ({len(crit)} high/critical)")
                 if crit:
-                    await notify.send(f":rotating_light: ReconX {self.t['domain']}: {len(crit)} high/critical nuclei findings")
+                    await notify.send(f":rotating_light: ReconX {self.apex}: {len(crit)} high/critical nuclei findings")
             else:
                 self.log("nuclei: skipped (not installed or disabled)")
 
@@ -169,12 +223,7 @@ class Pipeline:
             self.db.set_health(self.target_id, self.monitor.state)
 
 
-def _json(d: dict) -> str:
-    import json
-    return json.dumps(d)
-
-
-async def run_target(target_id: int, run_nuclei: bool = True) -> int:
-    p = Pipeline(target_id, run_nuclei=run_nuclei)
+async def run_target(target_id: int, run_nuclei: bool = True, run_screenshot: bool = True) -> int:
+    p = Pipeline(target_id, run_nuclei=run_nuclei, run_screenshot=run_screenshot)
     await p.run()
     return p.run_id
