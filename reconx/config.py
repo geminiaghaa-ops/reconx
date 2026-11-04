@@ -36,6 +36,10 @@ class Settings:
     health_slow_ms: int = int(_env("RECONX_HEALTH_SLOW_MS", "5000"))
     health_recover_threshold: int = int(_env("RECONX_HEALTH_RECOVER_THRESHOLD", "2"))
 
+    # Asset discovery
+    brute_force: bool = _env("RECONX_BRUTE", "1") not in ("0", "false", "no")
+    subdomain_wordlist: str | None = _env("RECONX_SUBDOMAIN_WORDLIST")
+
     # Optional passive-source API keys (all optional; sources are skipped if absent).
     securitytrails_key: str | None = _env("SECURITYTRAILS_API_KEY")
     virustotal_key: str | None = _env("VIRUSTOTAL_API_KEY")
