@@ -53,7 +53,8 @@ async def _probe_py(host: str, client: httpx.AsyncClient, sem: asyncio.Semaphore
                 ip = ""
             cdn, waf = waf_cdn.detect(dict(r.headers), body_snippet=body[:2000])
             return {
-                "url": str(r.url),
+                "input": url,            # the in-scope host/URL we probed
+                "url": str(r.url),       # final URL (may be a redirect target)
                 "status": r.status_code,
                 "title": title,
                 "tech": ",".join(tech),
@@ -75,6 +76,7 @@ async def probe(hosts: list[str]) -> list[dict]:
         out = []
         for obj in tools.parse_jsonl(res.lines):
             out.append({
+                "input": obj.get("input") or obj.get("url", ""),
                 "url": obj.get("url") or obj.get("input", ""),
                 "status": obj.get("status_code") or obj.get("status-code"),
                 "title": obj.get("title", ""),

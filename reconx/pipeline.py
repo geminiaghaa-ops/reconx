@@ -164,7 +164,24 @@ class Pipeline:
             self._begin("http-probe", "http")
             probe_targets = sorted(set(live_hosts) | {u for u in extra_urls if self.scope.in_scope(u)})
             services = await http_probe.probe(probe_targets)
-            services = [s for s in services if self.scope.in_scope(s["url"])]
+            # Filter on the host we PROBED (in-scope), not the final URL: a host
+            # that redirects to its parent/apex still counts as a live in-scope
+            # service. If it redirected out of scope, re-key it to the in-scope
+            # host and note the redirect, so downstream stages stay in scope.
+            from urllib.parse import urlparse as _up
+            kept = []
+            for s in services:
+                inp = s.get("input") or s.get("url", "")
+                if not inp or not self.scope.in_scope(inp):
+                    continue
+                final = s.get("url", inp)
+                if not self.scope.in_scope(final):
+                    fh = _up(final).hostname or ""
+                    s["url"] = inp if "://" in inp else f"https://{inp}"
+                    if fh:
+                        s["title"] = (s.get("title", "") + f"  [redirects → {fh}]").strip()
+                kept.append(s)
+            services = kept
             for s in services:
                 self.db.upsert_http(self.target_id, **s)
             live = [s["url"] for s in services]
