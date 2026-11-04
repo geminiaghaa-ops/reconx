@@ -86,6 +86,7 @@ async function renderDetail(){
     <div class="acts">
       <button onclick="startScan(${current}, true)" ${d.running?'disabled':''}>▶ Run full scan</button>
       <button class="ghost" onclick="startScan(${current}, false)" ${d.running?'disabled':''}>▶ Scan (no nuclei)</button>
+      <button class="ghost" onclick="editAuth(${current})">${(t.auth_cookie||t.auth_headers)?'🔑 Auth set':'🔑 Set auth'}</button>
       <button class="ghost" onclick="renderDetail()">⟳ Refresh</button>
     </div>
     <div class="stat-row">
@@ -173,6 +174,17 @@ async function renderLog(){
   $("#tab-body").innerHTML = `<div class="log">${esc(l.log)||'(no log yet)'}</div>`;
 }
 
+async function editAuth(id){
+  const cookie = prompt("Session cookie for in-scope hosts (blank to clear):\ne.g. sid=abc123; csrf=xyz", "");
+  if(cookie === null) return;
+  const headers = prompt("Extra headers, one per line (blank for none):\ne.g. Authorization: Bearer eyJ…", "");
+  if(headers === null) return;
+  const r = await api(`/api/targets/${id}/auth`, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({auth_cookie:cookie, auth_headers:headers, clear_auth:true})});
+  alert("Auth updated — cookie:" + r.has_cookie + " headers:" + r.has_headers + "\nSent only to in-scope hosts.");
+  renderDetail();
+}
+
 async function startScan(id, nuclei){
   try{
     await api(`/api/targets/${id}/scan`, {method:"POST", headers:{"Content-Type":"application/json"},
@@ -187,8 +199,10 @@ $("#add-form").onsubmit = async (e) => {
   const domain = $("#domain").value.trim();
   if(!domain) return;
   const r = await api("/api/targets", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({domain, scope_in:$("#scope_in").value, scope_out:$("#scope_out").value})});
+    body: JSON.stringify({domain, scope_in:$("#scope_in").value, scope_out:$("#scope_out").value,
+      auth_cookie:$("#auth_cookie").value, auth_headers:$("#auth_headers").value})});
   $("#domain").value=""; $("#scope_in").value=""; $("#scope_out").value="";
+  $("#auth_cookie").value=""; $("#auth_headers").value="";
   await loadTargets();
   selectTarget(r.id);
 };

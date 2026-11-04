@@ -183,15 +183,16 @@ async def _retirejs(js_files: list[tuple[str, str]]) -> list[dict]:
     return out
 
 
-async def analyze(js_urls: list[str]) -> list[dict]:
+async def analyze(js_urls: list[str], auth=None, scope=None) -> list[dict]:
     if not js_urls:
         return []
+    from ..auth import NO_AUTH
+    auth = auth or NO_AUTH
     findings: list[dict] = []
     downloaded: list[tuple[str, str]] = []
     sem = asyncio.Semaphore(settings.http_concurrency)
 
-    async with httpx.AsyncClient(timeout=settings.http_timeout, verify=False,
-                                 headers={"User-Agent": settings.user_agent}) as client:
+    async with auth.client(scope=scope, timeout=settings.http_timeout) as client:
         async def one(u):
             async with sem:
                 return await _fetch(u, client)

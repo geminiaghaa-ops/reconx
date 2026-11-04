@@ -13,6 +13,7 @@ pure-Python fallback keeps the stage working.
 ## Features
 
 - **Scope enforcement** — in/out-of-scope rules (with wildcards) gate every stage.
+- **Authenticated recon** — inject a session cookie and/or headers; they are sent **only to in-scope hosts** (stripped on out-of-scope redirects so your session can't leak), applied across probe/crawl/JS/nuclei, with logout & destructive links filtered during authed crawls.
 - **Subdomain enumeration** — `subfinder` / `assetfinder` / `amass`, always merged with Certificate Transparency (crt.sh).
 - **DNS resolution + wildcard detection** — `dnsx`, or built-in resolver (A + CNAME); flags wildcard zones so fake hosts aren't trusted.
 - **Port scanning** — `naabu`, or a built-in async TCP connect scan over a curated top-ports list (not just 80/443); open ports feed extra probe URLs.
@@ -56,6 +57,11 @@ python cli.py tools                     # what's installed vs. built-in fallback
 python cli.py scan example.com          # add + full scan
 python cli.py scan example.com --no-nuclei --in "*.example.com" --out "shop.example.com"
 python cli.py list
+
+# Authenticated scan (session sent only to in-scope hosts):
+python cli.py scan app.example.com \
+    --cookie "sessionid=abc123; csrftoken=xyz" \
+    --header "Authorization: Bearer eyJ..."
 ```
 
 ### Input & troubleshooting

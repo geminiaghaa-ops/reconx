@@ -10,15 +10,19 @@ from .. import tools
 
 
 async def scan(urls: list[str], severity: str = "low,medium,high,critical",
-               rate_limit: int = 50) -> list[dict]:
+               rate_limit: int = 50, auth=None) -> list[dict]:
     if not tools.which("nuclei") or not urls:
         return []
+    from ..auth import NO_AUTH
+    auth = auth or NO_AUTH
     args = [
         "nuclei", "-silent", "-jsonl", "-no-color",
         "-severity", severity,
         "-rate-limit", str(rate_limit),
         "-concurrency", "25",
     ]
+    for pair in auth.header_pairs():
+        args += ["-H", pair]
     res = await tools.run(args, stdin="\n".join(urls), timeout=1800)
     findings = []
     for obj in tools.parse_jsonl(res.lines):

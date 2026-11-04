@@ -47,6 +47,20 @@ def cmd_tools(_):
         print("\nAll optional tools installed. 🎉")
 
 
+def _apply_auth(tid, args):
+    import json as _j
+    cookie = getattr(args, "cookie", None) or ""
+    hdrs = {}
+    for h in (getattr(args, "header", None) or []):
+        if ":" in h:
+            k, v = h.split(":", 1)
+            hdrs[k.strip()] = v.strip()
+    if cookie or hdrs:
+        get_db().set_auth(tid, cookie, _j.dumps(hdrs) if hdrs else "")
+        bits = (["cookie"] if cookie else []) + ([f"{len(hdrs)} header(s)"] if hdrs else [])
+        print("  auth set: " + ", ".join(bits) + " (sent only to in-scope hosts)")
+
+
 def cmd_add(args):
     domain = normalize_target(args.domain)
     if not domain:
@@ -54,6 +68,7 @@ def cmd_add(args):
     tid = get_db().add_target(domain, args.in_scope or "", args.out_scope or "")
     note = f" (from {args.domain})" if args.domain.strip() != domain else ""
     print(f"target {tid}: {domain}{note}")
+    _apply_auth(tid, args)
 
 
 def cmd_list(_):
@@ -68,6 +83,7 @@ def cmd_scan(args):
     if not domain:
         print("error: provide a valid domain or URL"); return 1
     tid = get_db().add_target(domain, args.in_scope or "", args.out_scope or "")
+    _apply_auth(tid, args)
     note = f" (from {args.domain})" if args.domain.strip() != domain else ""
     print(f"scanning target {tid}: {domain}{note} (nuclei={not args.no_nuclei}) ...")
     run_id = asyncio.run(run_target(tid, run_nuclei=not args.no_nuclei))
@@ -91,6 +107,8 @@ def main(argv=None):
 
     sp = sub.add_parser("add", help="add a target")
     sp.add_argument("domain"); sp.add_argument("--in", dest="in_scope"); sp.add_argument("--out", dest="out_scope")
+    sp.add_argument("--cookie", help="session cookie string, e.g. 'sid=abc; csrf=xyz'")
+    sp.add_argument("--header", action="append", help="extra header 'Name: value' (repeatable)")
     sp.set_defaults(fn=cmd_add)
 
     sp = sub.add_parser("list", help="list targets"); sp.set_defaults(fn=cmd_list)
@@ -98,6 +116,8 @@ def main(argv=None):
     sp = sub.add_parser("scan", help="add (if needed) and scan a target")
     sp.add_argument("domain"); sp.add_argument("--in", dest="in_scope"); sp.add_argument("--out", dest="out_scope")
     sp.add_argument("--no-nuclei", action="store_true")
+    sp.add_argument("--cookie", help="session cookie string, e.g. 'sid=abc; csrf=xyz'")
+    sp.add_argument("--header", action="append", help="extra header 'Name: value' (repeatable)")
     sp.set_defaults(fn=cmd_scan)
 
     sp = sub.add_parser("web", help="launch the web dashboard")

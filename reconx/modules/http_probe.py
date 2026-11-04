@@ -13,6 +13,7 @@ import re
 import httpx
 
 from ..config import settings
+from ..auth import NO_AUTH
 from .. import tools
 from . import waf_cdn
 
@@ -67,11 +68,14 @@ async def _probe_py(host: str, client: httpx.AsyncClient, sem: asyncio.Semaphore
     return None
 
 
-async def probe(hosts: list[str]) -> list[dict]:
+async def probe(hosts: list[str], auth=None, scope=None) -> list[dict]:
+    auth = auth or NO_AUTH
     tool = tools.first_available("http")
     if tool == "httpx" and await tools.verify_pd("httpx"):
         args = ["httpx", "-silent", "-json", "-title", "-tech-detect", "-status-code",
                 "-web-server", "-ip", "-cdn", "-follow-redirects", "-no-color"]
+        for pair in auth.header_pairs():
+            args += ["-H", pair]
         res = await tools.run(args, stdin="\n".join(hosts), timeout=900)
         out = []
         for obj in tools.parse_jsonl(res.lines):
@@ -93,10 +97,7 @@ async def probe(hosts: list[str]) -> list[dict]:
     # Fallback: pure python
     sem = asyncio.Semaphore(settings.http_concurrency)
     results = []
-    async with httpx.AsyncClient(
-        timeout=settings.http_timeout, verify=False,
-        headers={"User-Agent": settings.user_agent},
-    ) as client:
+    async with auth.client(scope=scope, timeout=settings.http_timeout) as client:
         tasks = [_probe_py(h, client, sem) for h in hosts]
         for coro in asyncio.as_completed(tasks):
             r = await coro

@@ -25,6 +25,7 @@ import time
 from .config import settings
 from .db import get_db
 from .scope import Scope
+from .auth import Auth
 from . import notify, tools
 from .modules import (subdomains, dns_resolve, ports as portscan, http_probe,
                       takeover, screenshot, crawl, jsanalysis, nuclei_scan)
@@ -42,8 +43,10 @@ class Pipeline:
         self.t = self.db.get_target(target_id)
         self.scope = Scope(self.t["domain"], self.t["scope_in"], self.t["scope_out"])
         self.apex = self.t["domain"]
+        self.auth = Auth.from_target(self.t)
         self.run_id = self.db.create_run(target_id)
-        self.monitor = HealthMonitor(target_id=target_id, on_event=self._health_event)
+        self.monitor = HealthMonitor(target_id=target_id, on_event=self._health_event,
+                                     auth=self.auth, scope=self.scope)
         self.run_nuclei = run_nuclei
         self.run_screenshot = run_screenshot
         self.stats: dict = {}
@@ -114,6 +117,14 @@ class Pipeline:
         miss = sorted({t for r in plan for t in r["missing"]})
         if miss:
             self.log(f"Not installed, using fallbacks: {', '.join(miss)}  (run `python cli.py tools` for install commands)")
+        if self.auth.active:
+            what = []
+            if self.auth.cookie:
+                what.append("cookie")
+            if self.auth.headers:
+                what.append(f"{len(self.auth.headers)} header(s)")
+            self.log(f"🔑 Authenticated scan: injecting {', '.join(what)} on in-scope hosts only "
+                     f"(stripped on out-of-scope redirects; logout/destructive links filtered)")
         self.log("───────────────────────────────────────")
 
         try:
@@ -163,7 +174,7 @@ class Pipeline:
             await self._gate("http-probe")
             self._begin("http-probe", "http")
             probe_targets = sorted(set(live_hosts) | {u for u in extra_urls if self.scope.in_scope(u)})
-            services = await http_probe.probe(probe_targets)
+            services = await http_probe.probe(probe_targets, auth=self.auth, scope=self.scope)
             # Filter on the host we PROBED (in-scope), not the final URL: a host
             # that redirects to its parent/apex still counts as a live in-scope
             # service. If it redirected out of scope, re-key it to the in-scope
@@ -201,7 +212,7 @@ class Pipeline:
 
             # 5. subdomain takeover
             self._begin("takeover")
-            tk = await takeover.check(resolved)
+            tk = await takeover.check(resolved, auth=self.auth, scope=self.scope)
             nt = 0
             for f in tk:
                 if self.db.add_finding(self.target_id, "takeover", f["service"], f["evidence"],
@@ -217,7 +228,7 @@ class Pipeline:
             if self.run_screenshot and (tools.which("gowitness") or screenshot.find_chrome()):
                 await self._gate("screenshot")
                 self._begin("screenshot", "screenshot")
-                shots = await screenshot.capture(live, settings.artifacts_dir / f"shots_{self.target_id}")
+                shots = await screenshot.capture(live, settings.artifacts_dir / f"shots_{self.target_id}", auth=self.auth)
                 for url, path in shots.items():
                     self.db.set_screenshot(self.target_id, url, path)
                 self.stats["screenshots"] = len(shots)
@@ -228,7 +239,7 @@ class Pipeline:
             # 7. crawl
             await self._gate("crawl")
             self._begin("crawl", "crawl")
-            crawled = await crawl.crawl(live)
+            crawled = await crawl.crawl(live, auth=self.auth, scope=self.scope)
             urls = self.scope.filter(crawled["urls"])
             js = self.scope.filter(crawled["js"])
             for u in urls:
@@ -239,7 +250,7 @@ class Pipeline:
 
             # 8. js analysis
             self._begin("js-analysis", "js")
-            jsf = await jsanalysis.analyze(js)
+            jsf = await jsanalysis.analyze(js, auth=self.auth, scope=self.scope)
             njs = 0
             for f in jsf:
                 if self.db.add_js_finding(self.target_id, f["source_url"], f["kind"], f["value"],
@@ -255,7 +266,7 @@ class Pipeline:
             if self.run_nuclei and tools.which("nuclei"):
                 await self._gate("nuclei")
                 self._begin("nuclei", "vuln")
-                nf = await nuclei_scan.scan(live)
+                nf = await nuclei_scan.scan(live, auth=self.auth)
                 nn = 0
                 for f in nf:
                     if self.db.add_finding(self.target_id, "nuclei", f["template"], f["name"],

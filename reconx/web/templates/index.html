@@ -20,6 +20,12 @@
       <input id="domain" placeholder="example.com" autocomplete="off" required>
       <textarea id="scope_in" placeholder="In-scope (optional)&#10;*.example.com&#10;api.example.com"></textarea>
       <textarea id="scope_out" placeholder="Out-of-scope (optional)&#10;blog.example.com"></textarea>
+      <details class="auth-box">
+        <summary>🔑 Login / auth (optional)</summary>
+        <textarea id="auth_cookie" placeholder="Session cookie&#10;sid=abc123; csrf=xyz"></textarea>
+        <textarea id="auth_headers" placeholder="Extra headers, one per line&#10;Authorization: Bearer eyJ…"></textarea>
+        <div class="hint">Sent only to in-scope hosts. Stripped on out-of-scope redirects.</div>
+      </details>
       <button type="submit">+ Add target</button>
     </form>
     <div id="targets" class="targets"></div>

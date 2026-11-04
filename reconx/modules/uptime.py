@@ -46,6 +46,8 @@ class HealthMonitor:
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
     health: dict[str, HostHealth] = field(default_factory=dict)
     on_event: callable = None  # optional callback(host, old_state, new_state)
+    auth: object = None        # Auth; checks run as the logged-in session if set
+    scope: object = None
 
     def set_hosts(self, hosts: list[str]) -> None:
         for h in hosts:
@@ -132,11 +134,9 @@ class HealthMonitor:
                 pass
 
     async def _loop(self) -> None:
-        async with httpx.AsyncClient(
-            timeout=settings.health_timeout if hasattr(settings, "health_timeout") else 10,
-            headers={"User-Agent": settings.user_agent},
-            verify=False,
-        ) as client:
+        from ..auth import NO_AUTH
+        auth = self.auth or NO_AUTH
+        async with auth.client(scope=self.scope, timeout=settings.health_timeout) as client:
             while not self._stop.is_set():
                 if self.health:
                     await asyncio.gather(*(self._check_one(client, hh) for hh in list(self.health.values())))

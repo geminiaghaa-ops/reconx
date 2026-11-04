@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS targets (
     scope_in    TEXT DEFAULT '',
     scope_out   TEXT DEFAULT '',
     created_at  REAL NOT NULL,
-    health      TEXT DEFAULT 'unknown'   -- unknown|healthy|degraded|down
+    health      TEXT DEFAULT 'unknown',  -- unknown|healthy|degraded|down
+    auth_cookie TEXT DEFAULT '',
+    auth_headers TEXT DEFAULT ''          -- JSON object of extra headers
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -130,6 +132,10 @@ class DB:
                 "waf": "TEXT DEFAULT ''",
                 "screenshot": "TEXT DEFAULT ''",
             },
+            "targets": {
+                "auth_cookie": "TEXT DEFAULT ''",
+                "auth_headers": "TEXT DEFAULT ''",
+            },
         }
         for table, cols in wanted.items():
             have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
@@ -172,6 +178,11 @@ class DB:
     def set_health(self, target_id: int, health: str) -> None:
         with self._cur() as c:
             c.execute("UPDATE targets SET health=? WHERE id=?", (health, target_id))
+
+    def set_auth(self, target_id: int, cookie: str = "", headers: str = "") -> None:
+        with self._cur() as c:
+            c.execute("UPDATE targets SET auth_cookie=?, auth_headers=? WHERE id=?",
+                      (cookie or "", headers or "", target_id))
 
     # ---- generic upserts ----------------------------------------------
     def upsert_asset(self, target_id: int, kind: str, value: str, meta: dict | None = None) -> bool:

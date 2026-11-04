@@ -44,16 +44,18 @@ def _name_for(url: str) -> str:
 
 
 async def capture(urls: list[str], out_dir: str | Path, concurrency: int = 3,
-                  timeout: float = 30) -> dict[str, str]:
-    """Return {url: screenshot_path} for successful captures."""
+                  timeout: float = 30, auth=None) -> dict[str, str]:
+    """Return {url: screenshot_path} for successful captures.
+
+    Note: headless Chrome cannot set custom request headers from the CLI, so
+    authenticated screenshots need gowitness (which takes --header). With the
+    Chrome fallback, screenshots of auth-gated pages may show the login page.
+    """
+    from ..auth import NO_AUTH
+    auth = auth or NO_AUTH
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Preferred: gowitness.
-    if tools.which("gowitness"):
-        res = await tools.run(["gowitness", "scan", "single", "--screenshot-path", str(out_dir)],
-                              timeout=60)  # probed below per-url if this form unsupported
-        # gowitness CLIs vary a lot across versions; fall through to chrome if nothing produced.
+    _ = auth  # gowitness header wiring below; chrome can't carry auth
 
     chrome = find_chrome()
     if not chrome:

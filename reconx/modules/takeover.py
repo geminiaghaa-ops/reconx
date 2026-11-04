@@ -47,9 +47,11 @@ def _match_service(cname: str) -> tuple[str, str] | None:
     return None
 
 
-async def check(resolved: dict) -> list[dict]:
+async def check(resolved: dict, auth=None, scope=None) -> list[dict]:
     """resolved: {host: {'ips':[...], 'cname': str, ...}}.
     Returns potential-takeover findings."""
+    from ..auth import NO_AUTH
+    auth = auth or NO_AUTH
     candidates = []
     for host, d in resolved.items():
         m = _match_service(d.get("cname", ""))
@@ -60,8 +62,7 @@ async def check(resolved: dict) -> list[dict]:
 
     findings: list[dict] = []
     sem = asyncio.Semaphore(settings.http_concurrency)
-    async with httpx.AsyncClient(timeout=settings.http_timeout, verify=False,
-                                 headers={"User-Agent": settings.user_agent}) as client:
+    async with auth.client(scope=scope, timeout=settings.http_timeout) as client:
         async def probe(host, cname, service, fp):
             body = ""
             for scheme in ("https", "http"):

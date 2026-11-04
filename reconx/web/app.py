@@ -64,7 +64,32 @@ async def api_add_target(payload: dict):
         raise HTTPException(400, "a valid domain or URL is required")
     db = get_db()
     tid = db.add_target(domain, payload.get("scope_in", ""), payload.get("scope_out", ""))
+    _store_auth(tid, payload)
     return {"id": tid, "domain": domain, "normalized_from": raw if raw.strip() != domain else None}
+
+
+def _store_auth(tid: int, payload: dict) -> None:
+    import json as _j
+    cookie = (payload.get("auth_cookie") or "").strip()
+    raw = payload.get("auth_headers") or ""
+    hdrs = {}
+    for line in raw.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            hdrs[k.strip()] = v.strip()
+    if cookie or hdrs or payload.get("clear_auth"):
+        get_db().set_auth(tid, cookie, _j.dumps(hdrs) if hdrs else "")
+
+
+@app.post("/api/targets/{target_id}/auth")
+async def api_set_auth(target_id: int, payload: dict):
+    db = get_db()
+    if not db.get_target(target_id):
+        raise HTTPException(404, "target not found")
+    _store_auth(target_id, payload)
+    t = db.get_target(target_id)
+    return {"ok": True, "has_cookie": bool(t.get("auth_cookie")),
+            "has_headers": bool(t.get("auth_headers"))}
 
 
 @app.post("/api/targets/{target_id}/scan")

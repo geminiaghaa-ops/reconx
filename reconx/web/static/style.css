@@ -67,3 +67,6 @@ td.mono,.mono{font-family:ui-monospace,"Cascadia Code",monospace;font-size:12px;
 .env-panel h4:first-child{margin-top:0}
 .env-panel table{margin-bottom:6px}
 .env-note{color:var(--warn);font-size:11px;margin-top:3px}
+.auth-box{margin:0 0 8px;border:1px solid var(--border);border-radius:7px;padding:6px 8px}
+.auth-box summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.auth-box textarea{margin-top:6px}
