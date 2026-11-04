@@ -62,6 +62,24 @@ class Pipeline:
     def _took(self) -> str:
         return f"{time.time() - getattr(self, '_stage_t0', time.time()):.1f}s"
 
+    def _representative_hosts(self, live_urls: list[str]) -> list[str]:
+        """Pick a few canonical hosts to health-monitor (apex / www over https).
+
+        We must NOT monitor every discovered service: alt-port / cPanel / plain
+        HTTP endpoints behind a WAF are often flaky, and letting one of them flip
+        to 'down' would pause the whole scan. The apex is the real 'is the target
+        up' signal."""
+        from urllib.parse import urlparse
+        apex = self.apex
+        want = {f"https://{apex}", f"https://www.{apex}",
+                f"http://{apex}", f"http://www.{apex}"}
+        reps = [u for u in live_urls if u in want]
+        if not reps:
+            roots = [u for u in live_urls
+                     if not urlparse(u).port and urlparse(u).path in ("", "/")]
+            reps = roots[:3] or live_urls[:3]
+        return reps[:4]
+
     def _health_event(self, host: str, old: str, new: str) -> None:
         self.db.set_health(self.target_id, self.monitor.state)
         self.log(f"HEALTH {host}: {old} -> {new}")
@@ -123,8 +141,9 @@ class Pipeline:
             self.stats["wildcard"] = len(dns["wildcard_ips"])
             self.log(f"✓ dns: {len(resolved)} resolved, wildcard_ips={len(dns['wildcard_ips'])} [{self._took()}]")
 
-            # start health monitoring now that we know which hosts exist
-            self.monitor.set_hosts(live_hosts)
+            # start health monitoring on a few canonical hosts (not every one)
+            mon0 = [h for h in live_hosts if h in (self.apex, f"www.{self.apex}")] or live_hosts[:3]
+            self.monitor.set_hosts(mon0)
             self.monitor.start()
             await asyncio.sleep(1)
 
@@ -159,7 +178,9 @@ class Pipeline:
                                    finished_at=time.time(), stats=_json(self.stats))
                 self.log("Recon complete.")
                 return
-            self.monitor.set_hosts(live)
+            reps = self._representative_hosts(live)
+            self.monitor.set_hosts(reps)
+            self.log(f"health monitor watching {len(reps)} representative host(s): {', '.join(reps)}")
 
             # 5. subdomain takeover
             self._begin("takeover")

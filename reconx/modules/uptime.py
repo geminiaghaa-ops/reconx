@@ -85,7 +85,11 @@ class HealthMonitor:
             try:
                 r = await client.get(url, follow_redirects=True)
                 status = r.status_code
-                up = status < 500
+                # Any HTTP response means the host is reachable. A WAF/CDN
+                # returning 403/429/503 is the edge answering, NOT the origin
+                # being down — treating those as "down" made flaky hosts pause
+                # the whole scan. Only a connection failure/timeout counts as down.
+                up = True
                 break
             except Exception:
                 continue
