@@ -28,7 +28,7 @@ from .scope import Scope
 from .auth import Auth
 from . import notify, tools
 from .modules import (subdomains, dns_resolve, ports as portscan, http_probe,
-                      takeover, screenshot, crawl, jsanalysis, nuclei_scan)
+                      takeover, screenshot, crawl, content, jsanalysis, nuclei_scan)
 from .modules.uptime import HealthMonitor
 
 
@@ -247,6 +247,28 @@ class Pipeline:
             self.stats["urls"] = len(urls)
             self.stats["js_files"] = len(js)
             self.log(f"✓ crawl: {len(urls)} urls, {len(js)} js files [{self._took()}]")
+
+            # 7b. content & API discovery (dir/file brute, sensitive files, swagger/graphql)
+            await self._gate("content")
+            self._begin("content")
+            cont = await content.discover(live, auth=self.auth, scope=self.scope)
+            curls = self.scope.filter(cont["urls"])
+            for u in curls:
+                self.db.upsert_asset(self.target_id, "url", u)
+            nexp = 0
+            for f in cont["findings"]:
+                if self.db.add_finding(self.target_id, "content", f["name"], f["note"],
+                                       f["severity"], f["url"], {"kind": f["kind"]}):
+                    nexp += 1
+            self.stats["content_paths"] = len(curls)
+            self.stats["exposures"] = nexp
+            js = sorted(set(js) | {u for u in curls if u.lower().split("?")[0].endswith(".js")})
+            self.stats["js_files"] = len(js)
+            chi = [f for f in cont["findings"] if f["severity"] in ("high", "critical")]
+            self.log(f"✓ content: {len(curls)} paths, {nexp} exposures/api ({len(chi)} high) [{self._took()}]")
+            if chi:
+                await notify.send(f":rotating_light: ReconX {self.apex}: {len(chi)} high-severity exposures "
+                                  f"({', '.join(sorted({f['name'] for f in chi})[:5])})")
 
             # 8. js analysis
             self._begin("js-analysis", "js")

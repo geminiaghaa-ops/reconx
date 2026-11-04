@@ -21,6 +21,7 @@ pure-Python fallback keeps the stage working.
 - **Subdomain takeover** — built-in fingerprint engine (GitHub Pages, S3, Heroku, Shopify, Azure, …) flagging dangling CNAMEs.
 - **Screenshots** — `gowitness`, or headless Chrome/Chromium, for fast visual triage.
 - **Crawling & URL discovery** — `katana` + `gau`/`waybackurls`, or built-in crawler; extracts JS files.
+- **Content & API discovery** — baseline-filtered directory/file brute-force, sensitive-file exposure (`.git`, `.env`, backups, actuator, phpinfo, …), Swagger/OpenAPI docs, and GraphQL introspection.
 - **JavaScript analysis** (built-in):
   - secrets (AWS/GCP/Stripe/Slack/GitHub/JWT/private keys, …) with entropy + placeholder filtering
   - endpoint/URL extraction (new attack surface)
