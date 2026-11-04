@@ -28,6 +28,7 @@ pure-Python fallback keeps the stage working.
   - DOM-XSS source→sink detection
   - exposed `sourceMappingURL` detection
   - known-vulnerable libraries via **retire.js** (if installed)
+- **Built-in active checks** — CORS misconfiguration (reflected/arbitrary/null origin), open redirect, and missing security headers — run even without nuclei.
 - **Vulnerability scanning** — `nuclei` (optional), rate-limited and scope-gated.
 - **Target-health monitor** — continuously samples availability/latency during a
   scan. A circuit-breaker flips a target to `degraded`/`down`, and heavy stages

@@ -28,7 +28,7 @@ from .scope import Scope
 from .auth import Auth
 from . import notify, tools
 from .modules import (subdomains, dns_resolve, ports as portscan, http_probe,
-                      takeover, screenshot, crawl, content, jsanalysis, nuclei_scan)
+                      takeover, screenshot, crawl, content, jsanalysis, vulncheck, nuclei_scan)
 from .modules.uptime import HealthMonitor
 
 
@@ -283,6 +283,22 @@ class Pipeline:
             self.log(f"✓ js: {njs} findings ({len(hi)} high/critical) [{self._took()}]")
             if hi:
                 await notify.send(f":rotating_light: ReconX {self.apex}: {len(hi)} high-severity JS findings")
+
+            # 8c. built-in active checks (CORS / open-redirect / security headers)
+            await self._gate("checks")
+            self._begin("checks")
+            vc = await vulncheck.check(live, auth=self.auth, scope=self.scope)
+            nvc = 0
+            for f in vc:
+                if self.db.add_finding(self.target_id, "check", f["name"], f["note"],
+                                       f["severity"], f["url"], {}):
+                    nvc += 1
+            self.stats["checks"] = nvc
+            vhi = [f for f in vc if f["severity"] in ("high", "critical")]
+            self.log(f"✓ checks: {nvc} findings ({len(vhi)} high) [{self._took()}]")
+            if vhi:
+                await notify.send(f":rotating_light: ReconX {self.apex}: {len(vhi)} high-severity checks "
+                                  f"({', '.join(sorted({f['name'] for f in vhi})[:4])})")
 
             # 9. nuclei
             if self.run_nuclei and tools.which("nuclei"):
