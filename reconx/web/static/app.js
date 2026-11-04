@@ -87,6 +87,7 @@ async function renderDetail(){
       <button onclick="startScan(${current}, true)" ${d.running?'disabled':''}>▶ Run full scan</button>
       <button class="ghost" onclick="startScan(${current}, false)" ${d.running?'disabled':''}>▶ Scan (no nuclei)</button>
       <button class="ghost" onclick="editAuth(${current})">${(t.auth_cookie||t.auth_headers)?'🔑 Auth set':'🔑 Set auth'}</button>
+      <button class="ghost" onclick="window.open('/api/targets/${current}/report','_blank')">📄 Report</button>
       <button class="ghost" onclick="renderDetail()">⟳ Refresh</button>
     </div>
     <div class="stat-row">

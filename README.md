@@ -34,6 +34,7 @@ pure-Python fallback keeps the stage working.
   scan. A circuit-breaker flips a target to `degraded`/`down`, and heavy stages
   **auto-pause and wait to recover** so your scanning never knocks a target over.
 - **Storage & diffing** — SQLite; re-scans flag newly discovered assets.
+- **Reporting** — one-click self-contained **HTML report** (and JSON export) per target: summary, findings prioritized by severity (nuclei + takeover + exposures + checks + JS secrets), live services with tech/WAF, and the subdomain list. `python cli.py report <target>` or the dashboard's 📄 Report button.
 - **Notifications** — Discord / Slack / Telegram on new assets, high-severity findings, or health alerts.
 - **Web dashboard** — add targets, launch scans, watch the live log, browse
   findings, and view the health timeline.

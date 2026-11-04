@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..db import get_db
@@ -150,6 +150,24 @@ async def api_screenshot(path: str):
     if base in p.parents and p.exists() and p.suffix.lower() == ".png":
         return FileResponse(str(p))
     raise HTTPException(404, "not found")
+
+
+@app.get("/api/targets/{target_id}/report")
+async def api_report(target_id: int):
+    from ..report import build_html
+    db = get_db()
+    if not db.get_target(target_id):
+        raise HTTPException(404, "target not found")
+    return HTMLResponse(build_html(db, target_id))
+
+
+@app.get("/api/targets/{target_id}/report.json")
+async def api_report_json(target_id: int):
+    from ..report import build_json
+    db = get_db()
+    if not db.get_target(target_id):
+        raise HTTPException(404, "target not found")
+    return JSONResponse(build_json(db, target_id))
 
 
 @app.get("/api/targets/{target_id}/health")

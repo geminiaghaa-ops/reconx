@@ -94,6 +94,29 @@ def cmd_scan(args):
     print(run.get("stats", "{}"))
 
 
+def cmd_report(args):
+    import json as _j
+    from reconx.report import build_html, build_json
+    db = get_db()
+    dom = normalize_target(args.target)
+    tid = None
+    if args.target.isdigit():
+        tid = int(args.target)
+    else:
+        for t in db.list_targets():
+            if t["domain"] == dom:
+                tid = t["id"]; break
+    if not tid or not db.get_target(tid):
+        print(f"error: target not found: {args.target}"); return 1
+    if args.json:
+        out = args.out or f"reconx-{dom}.json"
+        open(out, "w").write(_j.dumps(build_json(db, tid), indent=2, default=str))
+    else:
+        out = args.out or f"reconx-{dom}.html"
+        open(out, "w").write(build_html(db, tid))
+    print(f"report written: {out}")
+
+
 def cmd_web(args):
     print(f"ReconX dashboard: http://{args.host}:{args.port}")
     run_server(host=args.host, port=args.port)
@@ -119,6 +142,11 @@ def main(argv=None):
     sp.add_argument("--cookie", help="session cookie string, e.g. 'sid=abc; csrf=xyz'")
     sp.add_argument("--header", action="append", help="extra header 'Name: value' (repeatable)")
     sp.set_defaults(fn=cmd_scan)
+
+    sp = sub.add_parser("report", help="export an HTML (or JSON) report for a target")
+    sp.add_argument("target", help="target domain or id")
+    sp.add_argument("--out"); sp.add_argument("--json", action="store_true")
+    sp.set_defaults(fn=cmd_report)
 
     sp = sub.add_parser("web", help="launch the web dashboard")
     sp.add_argument("--host", default="127.0.0.1"); sp.add_argument("--port", type=int, default=8000)
